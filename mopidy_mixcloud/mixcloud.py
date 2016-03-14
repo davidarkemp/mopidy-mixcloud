@@ -63,6 +63,7 @@ class cache(object):
         return _memoized
 
 def add_cloudcast(index, json):
+    logger.debug( 'add_cloudcast %s', ','.join(json.keys()) )
     if STR_NAME not in json or not json[STR_NAME]:
         logger.warn('name not found in track %s', index)
         return {}
@@ -257,7 +258,7 @@ class MixcloudClient(object):
         logger.debug("Get user stream")
         result = self.http_client.get(URL_FEED).json()
         logger.debug(result[u'data'][0].keys())
-        return self.sanitize_tracks([add_cloudcast(0, track) for track in result[u'data'][0]['cloudcasts']])
+        return self.sanitize_tracks([add_cloudcast(0, track[u'cloudcasts'][0]) for track in result[u'data']])
 
     @cache()
     def get_explore_categories(self):
