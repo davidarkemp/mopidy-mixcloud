@@ -29,8 +29,6 @@ class MixcloudBackend(pykka.ThreadingActor, backend.Backend):
 class MixcloudPlaybackProvider(backend.PlaybackProvider):
 
     def translate_uri(self, uri):
-        track_id = self.backend.remote.parse_track_uri(uri)
-        track = self.backend.remote.get_track(track_id, True)
-        if track is None:
-            return None
-        return track.uri
+        logger.debug('translate track from %s' % uri)
+        uri = uri.replace('mixcloud:', '')
+        return self.backend.remote.get_track_uri(uri)

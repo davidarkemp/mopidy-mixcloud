@@ -11,8 +11,12 @@ from urllib import quote_plus
 
 from mopidy.models import Album, Artist, Track
 
-import requests
 
+
+import requests
+import base64
+import json
+from itertools import  cycle
 
 logger = logging.getLogger(__name__)
 
@@ -235,18 +239,8 @@ class MixcloudClient(object):
 
     def __init__(self, config):
         super(MixcloudClient, self).__init__()
-        #token = config['auth_token']
-        #self.explore_songs = config.get('explore_songs', 10)
         self.http_client = requests.Session()
-        #self.http_client.headers.update({'Authorization': 'OAuth %s' % token})
 
-        #try:
-        #    self._get('me.json')
-        #except Exception as err:
-        #    if err.response is not None and err.response.status_code == 401:
-        #        logger.error('Invalid "auth_token" used for Mixcloud authentication!')
-        #    else:
-        #        raise
 
     @property
     @cache()
@@ -371,24 +365,50 @@ class MixcloudClient(object):
             tracks.append(self.parse_track(track))
         return self.sanitize_tracks(tracks)
 
-    def resolve_url(self, uri):
-        return self.parse_results([self._get('resolve.json?url=%s' % uri)])
-
-    def _get(self, url, endpoint='api'):
-        if '?' in url:
-            url = '%s&client_id=%s' % (url, self.CLIENT_ID)
+    def get_track_uri(self, uri):
+        ck=URL_MIXCLOUD[:-1]+uri
+        logger.debug('Locally resolving cloudcast stream for '+ck)
+        headers={
+            'User-Agent' : 'Mozilla/5.0 (Windows NT 6.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/35.0.1916.27 Safari/537.36',
+            'Referer' : URL_MIXCLOUD
+        }
+        response = self.http_client.get(ck, headers=headers)
+        response.raise_for_status()
+        data=response.text
+        match=re.search('m-p-ref="cloudcast_page" m-play-info="(.*)" m-preview=', data)
+        if match:
+            try:
+                logger.debug('Decoding '+match.group(1))
+                playInfo=base64.b64decode(match.group(1))
+                magicString=base64.b64decode('cGxlYXNlZG9udGRvd25sb2Fkb3VybXVzaWN0aGVhcnRpc3Rzd29udGdldHBhaWQ=')
+                playInfoJSON=''.join(chr(ord(a) ^ ord(b)) for a,b in zip(playInfo,cycle(magicString)))
+                json_content=json.loads(playInfoJSON)
+                if STR_STREAMURL in json_content and json_content[STR_STREAMURL]:
+                    return json_content[STR_STREAMURL]
+                else:
+                    logger.warn('Unable to resolve (content)')
+            except Exception as e:
+                logger.error('Unexpected error resolving local error=%s' % e)
         else:
-            url = '%s?client_id=%s' % (url, self.CLIENT_ID)
+            logger.debug('Unable to resolve (match)')
 
-        url = 'https://%s.mixcloud.com/%s' % (endpoint, url)
+    def _get(self, url):
+
 
         logger.debug('Requesting %s' % url)
-        res = self.http_client.get(url)
+        res = self.http_client.get(URL_API + url)
         res.raise_for_status()
         return res.json()
 
     def sanitize_tracks(self, tracks):
         return filter(None, tracks)
+
+    @cache()
+    def resolve_url(self, url):
+
+        return self.parse_track(self._get(url))
+
+
 
     @cache()
     def parse_track(self, data, remote_url=False):
@@ -411,19 +431,15 @@ class MixcloudClient(object):
                 artist_kwargs[b'name'] = label_name
             else:
                 track_kwargs[b'name'] = name
-                artist_kwargs[b'name'] = data.get(STR_USER)
+                artist_kwargs[b'name'] = data[STR_USER]['name']
 
             album_kwargs[b'name'] = 'Mixcloud'
 
         if STR_DATE in data:
             track_kwargs[b'date'] = data[STR_DATE]
 
-        if remote_url:
-            track_kwargs[b'uri'] = self.get_streamble_url(data['stream_url'])
-        else:
-            track_kwargs[b'uri'] = 'mixcloud:song/%s.%s' % (
-                readable_url(data.get('title')), data.get('id')
-            )
+        track_kwargs[b'uri'] = 'mixcloud:' + data.get('key')
+
 
         track_kwargs[b'length'] = int(data.get('duration', 0))
         track_kwargs[b'comment'] = data.get('permalink_url', '')
@@ -432,7 +448,7 @@ class MixcloudClient(object):
             artist = Artist(**artist_kwargs)
             track_kwargs[b'artists'] = [artist]
 
-        if album_kwargs:
+        """if album_kwargs:
             if 'artwork_url' in data and data['artwork_url']:
                 album_kwargs[b'images'] = [data['artwork_url']]
             else:
@@ -441,7 +457,7 @@ class MixcloudClient(object):
 
             album = Album(**album_kwargs)
             track_kwargs[b'album'] = album
-
+        """
         track = Track(**track_kwargs)
         return track
 
